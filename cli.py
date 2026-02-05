@@ -50,17 +50,30 @@ BANNER = """[bold cyan]
 [dim]v0.1.0 | Zypher Synergy[/dim]"""
 
 
+def expand_paths(obj):
+    """Recursively expand ~ in all string values that look like paths."""
+    if isinstance(obj, dict):
+        return {k: expand_paths(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand_paths(v) for v in obj]
+    if isinstance(obj, str) and obj.startswith("~"):
+        return str(Path(obj).expanduser())
+    return obj
+
+
 def load_config(config_path: str = None) -> dict:
     """Load configuration from YAML file."""
     paths = [
         config_path,
+        str(Path("~/.drone/config.yaml").expanduser()),
         "/etc/drone/config.yaml",
         str(Path(__file__).parent / "config" / "default.yaml"),
     ]
     for p in paths:
         if p and Path(p).exists():
             with open(p) as f:
-                return yaml.safe_load(f)
+                cfg = yaml.safe_load(f)
+                return expand_paths(cfg) if cfg else {}
     return {}
 
 
@@ -102,13 +115,14 @@ def main(ctx, config_path, verbose):
 
 @main.command()
 @click.option("--org-id", default="zypher-prototype", help="Organization ID")
-@click.option("--identity-dir", default="/etc/drone/identity", help="Identity directory")
+@click.option("--identity-dir", default="~/.drone/identity", help="Identity directory")
 @click.pass_context
 def provision(ctx, org_id, identity_dir):
     """Provision a new drone identity (run once per device)."""
     console.print(BANNER)
     console.print()
 
+    identity_dir = str(Path(identity_dir).expanduser())
     identity = DroneIdentity(identity_dir=identity_dir)
 
     if identity.is_provisioned:
