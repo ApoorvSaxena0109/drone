@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "drone-platform"
 version = "0.1.0"
 description = "Security-first drone software platform for Jetson devices"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 dependencies = [
     "pymavlink>=2.4.40",
     "opencv-python>=4.8.0",
@@ -15,12 +15,16 @@ dependencies = [
     "click>=8.1.0",
     "pyyaml>=6.0",
     "numpy>=1.24.0",
-    "ultralytics>=8.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
 jetson = [
     "onnxruntime-gpu>=1.16.0",
+    "ultralytics>=8.0.0",
+]
+vision = [
+    "ultralytics>=8.0.0",
 ]
 sim = [
     "dronekit-sitl>=3.3.0",
@@ -35,3 +39,6 @@ drone-cli = "cli:main"
 
 [tool.setuptools.packages.find]
 include = ["core*", "apps*", "tools*"]
+
+[tool.setuptools]
+py-modules = ["cli"]
