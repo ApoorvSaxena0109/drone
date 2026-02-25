@@ -159,24 +159,39 @@ class DroneIdentity:
 
     @staticmethod
     def _compute_hardware_fingerprint() -> str:
-        """Derive a hardware fingerprint from CPU serial + MAC address.
+        """Derive a hardware fingerprint from platform-specific identifiers.
 
-        On Jetson, reads /proc/device-tree/serial-number.
-        Falls back to a UUID-based fingerprint for dev/testing.
+        Sources (in order of preference):
+        - Jetson: /proc/device-tree/serial-number (ARM SoC serial)
+        - x86_64 laptop/desktop: /etc/machine-id + DMI product serial
+        - Fallback: random UUID (for containers/VMs without stable IDs)
+
+        Combined with primary network interface MAC address.
         """
         parts = []
 
-        # Try Jetson CPU serial
+        # Try Jetson CPU serial (ARM devices with device-tree)
         serial_path = Path("/proc/device-tree/serial-number")
         if serial_path.exists():
             parts.append(serial_path.read_text().strip().strip("\x00"))
         else:
-            # Fallback: /etc/machine-id (Linux) or generate one
+            # x86_64 Linux: use machine-id (stable across reboots)
             machine_id_path = Path("/etc/machine-id")
             if machine_id_path.exists():
                 parts.append(machine_id_path.read_text().strip())
             else:
                 parts.append(str(uuid.uuid4()))
+
+            # x86_64: also incorporate DMI product serial if available
+            dmi_serial_path = Path("/sys/class/dmi/id/product_serial")
+            if dmi_serial_path.exists():
+                try:
+                    serial = dmi_serial_path.read_text().strip()
+                    if serial and serial.lower() not in ("", "to be filled by o.e.m.",
+                                                          "default string", "none"):
+                        parts.append(serial)
+                except PermissionError:
+                    pass  # Needs root on some systems
 
         # Primary network interface MAC
         net_path = Path("/sys/class/net")
