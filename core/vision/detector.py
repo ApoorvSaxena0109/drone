@@ -1,9 +1,15 @@
-"""Object detection using YOLOv8 optimized for Jetson.
+"""Object detection using YOLOv8 for Jetson and x86_64 platforms.
 
 Supports multiple backends:
 - Ultralytics YOLOv8 (default, auto-exports to TensorRT on Jetson)
-- ONNX Runtime (fallback for non-Jetson platforms)
-- OpenCV DNN (lightest fallback, CPU-only)
+- ONNX Runtime (GPU or CPU — works on x86_64 laptops and Jetson)
+- OpenCV DNN (lightest fallback, supports CUDA or CPU)
+
+GPU acceleration is auto-detected:
+- NVIDIA Jetson: TensorRT via CUDA
+- NVIDIA discrete GPU (laptop/desktop): CUDA
+- AMD GPU with ROCm: ROCm via PyTorch or OpenCL via OpenCV
+- No GPU / unsupported: CPU fallback (still functional, just slower)
 
 The detector wraps all backends behind a single interface so the
 apps layer doesn't care what's doing the inference.
@@ -61,8 +67,45 @@ class Detection:
         return (self.x2 - self.x1) * (self.y2 - self.y1)
 
 
+def _detect_best_device() -> str:
+    """Auto-detect the best available compute device.
+
+    Checks for CUDA (NVIDIA Jetson / discrete GPU), ROCm (AMD GPU),
+    and falls back to CPU.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info("CUDA GPU detected: %s", gpu_name)
+            return "cuda"
+        # PyTorch built with ROCm reports AMD GPUs via cuda API
+        # but we can also check for the hip runtime
+        if hasattr(torch.version, "hip") and torch.version.hip is not None:
+            logger.info("AMD ROCm detected: %s", torch.version.hip)
+            return "cuda"  # ROCm uses the cuda device string in PyTorch
+    except ImportError:
+        pass
+
+    # Check for AMD GPU via sysfs (even without PyTorch ROCm)
+    try:
+        from pathlib import Path
+        amdgpu_path = Path("/sys/class/drm")
+        if amdgpu_path.exists():
+            for card in amdgpu_path.iterdir():
+                driver_path = card / "device" / "driver"
+                if driver_path.is_symlink() and "amdgpu" in str(driver_path.resolve()):
+                    logger.info("AMD GPU found via sysfs (install PyTorch ROCm for GPU acceleration)")
+                    break
+    except Exception:
+        pass
+
+    logger.info("No GPU detected, using CPU inference")
+    return "cpu"
+
+
 class Detector:
-    """YOLOv8 object detector with Jetson TensorRT acceleration."""
+    """YOLOv8 object detector with GPU acceleration (Jetson TensorRT, CUDA, ROCm, or CPU)."""
 
     def __init__(
         self,
@@ -123,17 +166,9 @@ class Detector:
 
             self._model = YOLO(model_path)
 
-            # On Jetson with TensorRT available, export for acceleration
+            # Auto-detect GPU: CUDA (Jetson/NVIDIA), ROCm (AMD), or CPU
             if self._device == "auto":
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        self._device = "cuda"
-                        logger.info("CUDA available, using GPU acceleration")
-                    else:
-                        self._device = "cpu"
-                except ImportError:
-                    self._device = "cpu"
+                self._device = _detect_best_device()
 
             self._backend = "ultralytics"
             logger.info("Loaded YOLOv8 model via ultralytics: %s", model_path)
@@ -156,12 +191,25 @@ class Detector:
                 return False
 
             net = cv2.dnn.readNetFromONNX(model_path)
-            # Use CUDA if available
+            # Try GPU backends: CUDA (NVIDIA) > OpenCL (AMD/Intel) > CPU
+            backend_set = False
             try:
                 net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
                 net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
                 logger.info("OpenCV DNN using CUDA backend")
+                backend_set = True
             except Exception:
+                pass
+            if not backend_set:
+                try:
+                    # OpenCL works on AMD GPUs and integrated Intel GPUs
+                    net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                    net.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
+                    logger.info("OpenCV DNN using OpenCL backend (AMD/Intel GPU)")
+                    backend_set = True
+                except Exception:
+                    pass
+            if not backend_set:
                 net.setPreferableBackend(cv2.dnn.DNN_BACKEND_DEFAULT)
                 net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                 logger.info("OpenCV DNN using CPU backend")

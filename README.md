@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">Drone Platform</h1>
   <p align="center">
-    <strong>Security-First Autonomous Drone Software for NVIDIA Jetson</strong>
+    <strong>Security-First Autonomous Drone Software for NVIDIA Jetson & x86_64 Linux</strong>
   </p>
   <p align="center">
     <a href="#quick-start">Quick Start</a> &middot;
@@ -16,7 +16,7 @@
 
 ## Overview
 
-Drone Platform is an edge-native autonomous drone software stack built for NVIDIA Jetson companion computers. It provides real-time AI-powered detection, cryptographically signed evidence chains, and autonomous mission execution — all running on-device with zero cloud dependency.
+Drone Platform is an edge-native autonomous drone software stack that runs on NVIDIA Jetson companion computers **and x86_64 Linux laptops/desktops** (AMD, Intel). It provides real-time AI-powered detection, cryptographically signed evidence chains, and autonomous mission execution — all running on-device with zero cloud dependency.
 
 Designed to operate as a companion computer layer alongside ArduPilot/PX4 flight controllers over the MAVLink protocol. Our code never touches GPL flight controller firmware — clean IP separation by design.
 
@@ -24,11 +24,11 @@ Designed to operate as a companion computer layer alongside ArduPilot/PX4 flight
 
 | Capability | Description |
 |:-----------|:------------|
-| **On-Device AI** | YOLOv8 object detection accelerated via TensorRT on Jetson GPU |
+| **On-Device AI** | YOLOv8 object detection — TensorRT on Jetson, CUDA/ROCm/OpenCL on x86_64, CPU fallback |
 | **Autonomous Missions** | Waypoint patrol, loiter-on-detection, auto-RTL on low battery |
 | **Tamper-Evident Logging** | Hash-chained audit trail — any modification breaks the chain |
 | **Signed Evidence** | Every detection is Ed25519-signed at capture with image hash |
-| **Hardware-Bound Identity** | Drone keypair tied to CPU serial + MAC fingerprint |
+| **Hardware-Bound Identity** | Drone keypair tied to hardware fingerprint (Jetson serial / x86_64 machine-id + MAC) |
 | **Offline-First** | Full autonomy with no network required; sync when available |
 
 ---
@@ -65,7 +65,8 @@ Crop health monitoring, livestock tracking, and boundary surveillance for large-
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                 NVIDIA JETSON                     │
+│         COMPANION COMPUTER                       │
+│    (Jetson / x86_64 Laptop / Desktop)            │
 │                                                  │
 │   ┌──────────┐   ┌──────────┐   ┌────────────┐  │
 │   │ Camera   │──▶│ YOLOv8   │──▶│  Alert Mgr │──│──▶ MQTT
@@ -87,7 +88,7 @@ Crop health monitoring, livestock tracking, and boundary surveillance for large-
 │   │  Missions · Findings · Audit Chain       │   │
 │   └──────────────────────────────────────────┘   │
 └──────────────────────┬───────────────────────────┘
-                       │ Serial / USB
+                       │ Serial / USB / SITL (UDP)
               ┌────────┴─────────┐
               │ Flight Controller │
               │  ArduPilot / PX4  │
@@ -98,7 +99,7 @@ Crop health monitoring, livestock tracking, and boundary surveillance for large-
 
 | Layer | Codebase | License |
 |:------|:---------|:--------|
-| Companion Computer (Jetson) | Drone Platform (proprietary) | Proprietary |
+| Companion Computer (Jetson / x86_64) | Drone Platform (proprietary) | Proprietary |
 | Communication Protocol | MAVLink | MIT |
 | Flight Controller | ArduPilot / PX4 (unmodified) | GPLv3 |
 
@@ -147,8 +148,8 @@ drone/
 │   │   ├── controller.py       #   Arm, takeoff, goto, land, RTL, speed control
 │   │   └── telemetry.py        #   Thread-safe telemetry state container
 │   ├── vision/                 # Computer vision pipeline
-│   │   ├── camera.py           #   Jetson CSI / USB / file capture
-│   │   └── detector.py         #   YOLOv8 (TensorRT, ONNX Runtime, OpenCV DNN)
+│   │   ├── camera.py           #   CSI / V4L2 / USB / file capture
+│   │   └── detector.py         #   YOLOv8 (TensorRT, CUDA, ROCm, OpenCL, CPU)
 │   ├── security/               # Cryptographic identity & audit
 │   │   ├── identity.py         #   Ed25519 provisioning, hardware binding
 │   │   ├── crypto.py           #   Signing, encryption, command verification
@@ -166,7 +167,8 @@ drone/
 │   ├── provision.py            #   Standalone device provisioning
 │   └── simulate.py             #   ArduPilot SITL simulation harness
 ├── config/
-│   ├── default.yaml            #   Reference configuration
+│   ├── default.yaml            #   Reference configuration (Jetson)
+│   ├── laptop.yaml             #   Configuration for x86_64 laptops (AMD/Intel)
 │   └── sample_waypoints.json   #   Example patrol route
 ├── tests/                      #   21 unit tests (models, security, storage)
 ├── cli.py                      #   Command-line interface
@@ -180,16 +182,20 @@ drone/
 ### Prerequisites
 
 - Python 3.10+
-- NVIDIA Jetson device (Nano, Orin Nano, Xavier NX) or any Linux system for simulation
-- ArduPilot-compatible flight controller (Pixhawk 4/6, CubeOrange, etc.)
+- **Jetson**: NVIDIA Jetson device (Nano, Orin Nano, Xavier NX) with JetPack SDK
+- **x86_64 Laptop/Desktop**: Any Linux system (Ubuntu 22.04+ recommended, AMD or Intel)
+- ArduPilot-compatible flight controller (Pixhawk 4/6, CubeOrange, etc.) or SITL for simulation
 
 ### Installation
 
 ```bash
-# Standard installation
+# Standard installation (CPU inference, works everywhere)
 pip install -e .
 
-# Jetson with GPU-accelerated inference
+# x86_64 laptop with CPU/ONNX inference
+pip install -e ".[laptop]"
+
+# Jetson with TensorRT GPU-accelerated inference
 pip install -e ".[jetson]"
 
 # Development (includes test dependencies)
@@ -218,28 +224,33 @@ SAVE THE API KEY — it will not be shown again.
 ### Step 2 — Configure
 
 ```bash
+# For Jetson:
 cp config/default.yaml /etc/drone/config.yaml
+
+# For x86_64 laptop (AMD/Intel):
+cp config/laptop.yaml ~/.drone/config.yaml
 ```
 
 Edit key parameters for your hardware:
 
+**Jetson:**
 ```yaml
 flight:
   connection: "/dev/ttyTHS1"      # Jetson UART to Pixhawk
-  # connection: "udp:127.0.0.1:14550"  # SITL simulation
-
 vision:
   camera_source: "csi:"           # Jetson CSI camera
   model: "yolov8n"                # yolov8n (Nano) or yolov8s (Orin)
-  confidence_threshold: 0.5
-  target_classes:
-    - "person"
-    - "car"
-    - "truck"
+```
 
-comms:
-  mqtt:
-    broker: "192.168.1.100"       # Ground station MQTT broker
+**x86_64 Laptop (AMD/Intel):**
+```yaml
+flight:
+  connection: "udp:127.0.0.1:14550"  # SITL simulation
+  # connection: "/dev/ttyACM0"        # USB flight controller
+vision:
+  camera_source: 0                    # Built-in webcam (V4L2)
+  # camera_source: "/dev/video0"      # Explicit V4L2 device
+  model: "yolov8n"                    # yolov8n recommended for CPU
 ```
 
 ### Step 3 — Run Mission
@@ -288,17 +299,41 @@ The simulation runs the complete mission lifecycle — provisioning, takeoff, wa
 
 ## Deployment
 
+### Supported Platforms
+
+| Platform | Architecture | GPU Acceleration | Camera |
+|:---------|:-------------|:-----------------|:-------|
+| **Jetson Nano / Orin Nano / Xavier NX** | ARM64 (aarch64) | TensorRT / CUDA | CSI (IMX219/IMX477) or USB |
+| **AMD Laptop** (Ubuntu 22.04+) | x86_64 | ROCm / OpenCL / CPU | Built-in webcam (V4L2) or USB |
+| **Intel Laptop** (Ubuntu 22.04+) | x86_64 | OpenCL / CPU | Built-in webcam (V4L2) or USB |
+| **NVIDIA GPU Desktop** | x86_64 | CUDA | USB |
+
 ### Hardware Bill of Materials
 
-| Component | Development | Production |
-|:----------|:------------|:-----------|
-| Companion Computer | Jetson Nano 4GB | Jetson Orin Nano 8GB |
-| Flight Controller | Pixhawk 4 Mini | Pixhawk 6C / CubeOrange |
-| Camera | USB Webcam | IMX477 (CSI) / Thermal dual |
-| FC Connection | USB Cable | UART (`/dev/ttyTHS1`) |
+| Component | Development (Laptop) | Production (Jetson) |
+|:----------|:---------------------|:--------------------|
+| Companion Computer | AMD/Intel Laptop (x86_64) | Jetson Orin Nano 8GB |
+| Flight Controller | SITL (simulated) | Pixhawk 6C / CubeOrange |
+| Camera | Built-in webcam / USB | IMX477 (CSI) / Thermal dual |
+| FC Connection | UDP (SITL) / USB | UART (`/dev/ttyTHS1`) |
 | Ground Link | WiFi | SiK Radio / RFD900x |
-| Storage | MicroSD 32GB | NVMe SSD 128GB+ |
+| Storage | Internal SSD | NVMe SSD 128GB+ |
 | MQTT Broker | Mosquitto (local) | EMQX / HiveMQ (on-prem) |
+
+### x86_64 Laptop Setup (AMD / Intel)
+
+```bash
+# Clone and install
+git clone <repository-url> && cd drone
+pip install -e ".[laptop]"
+
+# Provision identity
+drone-cli provision --org-id your-organization
+
+# Deploy configuration
+cp config/laptop.yaml ~/.drone/config.yaml
+# Edit ~/.drone/config.yaml for your hardware
+```
 
 ### Jetson Setup
 
@@ -371,7 +406,7 @@ All configuration is managed through a single YAML file. See [`config/default.ya
 | `flight.connection` | string | MAVLink endpoint. Serial: `/dev/ttyTHS1`. SITL: `udp:127.0.0.1:14550` |
 | `flight.max_altitude_m` | float | Safety ceiling in meters |
 | `flight.rtl_battery_pct` | int | Battery percentage that triggers automatic return-to-launch |
-| `vision.camera_source` | string/int | `0` for USB, `csi:` for Jetson CSI, or video file path |
+| `vision.camera_source` | string/int | `0` for USB/V4L2 webcam, `csi:` for Jetson CSI, `/dev/video0` for explicit V4L2, or video file path |
 | `vision.model` | string | YOLOv8 variant: `yolov8n`, `yolov8s`, or path to custom `.pt`/`.onnx` |
 | `vision.confidence_threshold` | float | Minimum detection confidence (0.0–1.0) |
 | `vision.target_classes` | list | COCO class names to detect |

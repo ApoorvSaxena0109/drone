@@ -1,9 +1,13 @@
-"""Camera capture for Jetson and standard USB/file sources.
+"""Camera capture for Jetson, x86_64 laptops, and other Linux systems.
 
 Supports:
 - Jetson CSI cameras via GStreamer pipeline (hardware-accelerated)
-- USB webcams via device index
+- USB webcams via V4L2 device index (works on any Linux — laptops, desktops)
+- V4L2 device paths (e.g., "/dev/video0") for explicit device selection
 - Video files for testing
+
+On x86_64 laptops (AMD/Intel), use device index 0 for the built-in
+webcam or an explicit V4L2 path like "/dev/video0".
 
 Frames are captured in a background thread to avoid blocking
 the main processing loop.
@@ -87,7 +91,14 @@ class Camera:
         if pipeline:
             self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         elif isinstance(source, int):
-            self._cap = cv2.VideoCapture(source)
+            # Device index (e.g., 0 = built-in webcam on laptops)
+            self._cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            self._cap.set(cv2.CAP_PROP_FPS, self._fps)
+        elif isinstance(source, str) and source.startswith("/dev/video"):
+            # Explicit V4L2 device path (common on x86_64 laptops)
+            self._cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
             self._cap.set(cv2.CAP_PROP_FPS, self._fps)
